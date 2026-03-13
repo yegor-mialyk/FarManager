@@ -65,6 +65,9 @@ struct column
 	string title;
 };
 
+using status_line = std::vector<column>;
+using status_lines = std::vector<status_line>;
+
 struct PanelViewSettings
 {
 	NONCOPYABLE(PanelViewSettings);
@@ -76,14 +79,14 @@ struct PanelViewSettings
 	{
 		PanelViewSettings result;
 		result.PanelColumns = PanelColumns;
-		result.StatusColumns = StatusColumns;
+		result.StatusLines = StatusLines;
 		result.Name = Name;
 		result.Flags = Flags;
 		return result;
 	}
 
 	std::vector<column> PanelColumns;
-	std::vector<column> StatusColumns;
+	status_lines StatusLines;
 	string Name;
 	unsigned Flags;
 };
