@@ -8720,28 +8720,16 @@ void FileList::render_column(const FileListItem& Item, const column& Column, int
 		if (Offset <= 0)
 			return Str;
 
-		if (Offset >= static_cast<int>(Str.size()))
+		if (static_cast<size_t>(Offset) >= Str.size())
 			return string_view{};
 
-		if (Offset && is_valid_surrogate_pair(Str[Offset - 1], Str[Offset]))
+		if (is_valid_surrogate_pair(Str[Offset - 1], Str[Offset]))
 			++Offset;
 
 		return Str.substr(Offset);
 	};
 
-	const auto ColumnType = Column.type;
-
-	if (ColumnType >= column_type::custom_0 && ColumnType <= column_type::custom_max)
-	{
-		const auto ColumnData = get_custom_column_data(Item, Column);
-		const auto Length = static_cast<int>(std::wcslen(ColumnData));
-		const auto CurLeftPos = calculate_left_and_max_pos(Length);
-
-		Text(fit_to_left(string(substr_from_utf16_boundary(ColumnData, CurLeftPos)), ColumnWidth));
-		return;
-	}
-
-	switch (ColumnType)
+	switch (const auto ColumnType = Column.type)
 	{
 	case column_type::name:
 		{
@@ -8762,7 +8750,7 @@ void FileList::render_column(const FileListItem& Item, const column& Column, int
 
 			if (Global->Opt->Highlight && Item.Colors && !Item.Colors->Mark.Mark.empty() && ColumnWidth > 1)
 			{
-				const auto MarkLength = static_cast<int>(visual_string_length(Item.Colors->Mark.Mark));
+				const int MarkLength = static_cast<int>(visual_string_length(Item.Colors->Mark.Mark));
 
 				if (ColumnWidth >= MarkLength)
 				{
@@ -8911,7 +8899,17 @@ void FileList::render_column(const FileListItem& Item, const column& Column, int
 			Text(fit_to_right(Value == FileListItem::values::unknown(Value) ? L"?"s : str(Value), ColumnWidth));
 			break;
 		}
+
 	default:
+		if (ColumnType >= column_type::custom_0 && ColumnType <= column_type::custom_max)
+		{
+			const auto ColumnData = get_custom_column_data(Item, Column);
+			const auto Length = static_cast<int>(std::wcslen(ColumnData));
+			const auto CurLeftPos = calculate_left_and_max_pos(Length);
+
+			Text(fit_to_left(string(substr_from_utf16_boundary(ColumnData, CurLeftPos)), ColumnWidth));
+		}
+
 		break;
 	}
 }
@@ -8925,43 +8923,34 @@ void FileList::render_status_lines(const FileListItem& Item, os::chrono::time_po
 	if (!VisibleStatusLines || StatusLines.empty())
 		return;
 
-	const int StatusTop = status_text_top_y();
+	SetColor(COL_PANELTEXT);
+
+	const int StatusTopY = status_text_top_y();
 
 	for (auto LineIndex = 0; LineIndex != VisibleStatusLines; ++LineIndex)
 	{
 		const auto& Columns = StatusLines[LineIndex];
 		const auto ColumnCount = Columns.size();
 
-		GotoXY(m_Where.left + 1, StatusTop + LineIndex);
+		int CurX = m_Where.left + 1;
 
 		for (const auto ColumnIndex : std::views::iota(0uz, ColumnCount))
 		{
-			const int CurX = WhereX();
-			const int CurY = WhereY();
 			const int ColumnWidth = Columns[ColumnIndex].width;
 
 			if (ColumnWidth < 0)
 				continue;
 
-			SetColor(COL_PANELTEXT);
+			GotoXY(CurX, StatusTopY + LineIndex);
 
 			render_column(Item, Columns[ColumnIndex], ColumnWidth, CurrentTime, MaxLeftPos);
 
-			GotoXY(CurX + ColumnWidth, CurY);
-
-			if (ColumnIndex == ColumnCount - 1)
-			{
-				SetColor(COL_PANELBOX);
-				Text(CurX + ColumnWidth == m_Where.right ? BoxSymbols[BS_V2] : L' ');
-			}
-			else
-				Text(L' ');
+			CurX += ColumnWidth + 1;
 		}
 
-		if (Columns.empty() && WhereX() < m_Where.right)
+		if (CurX < m_Where.right)
 		{
-			SetColor(COL_PANELTEXT);
-			Text(string(m_Where.right - WhereX(), L' '));
+			Text(string(m_Where.right - CurX, L' '));
 		}
 	}
 }
@@ -8972,53 +8961,49 @@ void FileList::ShowList()
 	const auto& ListData = *DataLock;
 	const auto CurrentTime = os::chrono::nt_clock::now();
 
-	bool StatusShown = false;
+	bool StatusShown = !Global->Opt->ShowPanelStatus;
 	int MaxLeftPos = 0, MinLeftPos = 0;
 
-	auto ColumnCount = m_ViewSettings.PanelColumns.size();
+	const auto ColumnCount = m_ViewSettings.PanelColumns.size();
 	const auto& Columns = m_ViewSettings.PanelColumns;
 
-	for (int I = m_Where.top + 1 + Global->Opt->ShowColumnTitles, J = m_CurTopFile;
-		I < m_Where.bottom - status_footer_height(m_Where.height()); I++, J++)
+	for (int CurY = m_Where.top + 1 + (Global->Opt->ShowColumnTitles ? 1 : 0), J = m_CurTopFile;
+		CurY < m_Where.bottom - status_footer_height(m_Where.height()); CurY++, J++)
 	{
 		int CurColumn = 0;
 
-		GotoXY(m_Where.left + 1, I);
-
+		int CurX = m_Where.left + 1;
 		int Level = 1;
 
 		for (const auto ColumnIndex: std::views::iota(0uz, ColumnCount))
 		{
 			const int ListPos = J + CurColumn * m_Height;
-
-			SetShowColor(ListPos);
-
-			const int CurX = WhereX();
-			const int CurY = WhereY();
-			bool ShowDivider = true;
-			const auto ColumnType = Columns[ColumnIndex].type;
 			const int ColumnWidth = Columns[ColumnIndex].width;
+			bool ShowDivider = true;
 
 			if (ColumnWidth < 0)
 				continue;
 
-			if (ListPos < static_cast<int>(ListData.size()))
+			SetShowColor(ListPos);
+
+			if (static_cast<size_t>(ListPos) < ListData.size())
 			{
-				if (!StatusShown && m_CurFile == ListPos && Global->Opt->ShowPanelStatus)
+				if (!StatusShown && m_CurFile == ListPos)
 				{
 					render_status_lines(ListData[m_CurFile], CurrentTime, MaxLeftPos);
 
-					GotoXY(CurX, CurY);
+					// Restore color for current item after status line rendering
 					SetShowColor(ListPos);
 
 					StatusShown = true;
 				}
 
-				SetShowColor(ListPos);
+				GotoXY(CurX, CurY);
 
-				if (ColumnType == column_type::name)
+				if (Columns[ColumnIndex].type == column_type::name)
 				{
 					int Width = ColumnWidth;
+
 					const auto ViewFlags = Columns[ColumnIndex].type_flags;
 
 					if ((ViewFlags & COLFLAGS_MARK) && Width > 2)
@@ -9046,6 +9031,7 @@ void FileList::ShowList()
 							SetShowColor(ListPos, false);
 
 							Text(ListData[ListPos].Colors->Mark.Mark, MarkLength);
+
 							SetColor(OldColor);
 						}
 					}
@@ -9137,31 +9123,27 @@ void FileList::ShowList()
 
 					Text(StrName, Width);
 
-					const int NameX = WhereX();
-
 					if (LeftBracket)
 					{
-						GotoXY(CurX - 1, CurY);
-
 						if (Level == 1)
 							SetColor(COL_PANELBOX);
+						else
+							HighlightBorder(Level, ListPos);
+
+						GotoXY(CurX - 1, CurY);
 
 						Text(openBracket);
-						SetShowColor(ListPos);
 					}
 
 					if (RightBracket)
 					{
 						HighlightBorder(Level, ListPos);
-						GotoXY(NameX, CurY);
+
+						GotoXY(CurX + ColumnWidth, CurY);
+
 						Text(closeBracket);
 
 						ShowDivider = false;
-
-						if (Level == m_ColumnsInStripe)
-							SetColor(COL_PANELTEXT);
-						else
-							SetShowColor(ListPos);
 					}
 				}
 				else
@@ -9174,21 +9156,19 @@ void FileList::ShowList()
 				Text(string(ColumnWidth, L' '));
 			}
 
-			if (!ShowDivider)
-				GotoXY(CurX + ColumnWidth + 1, CurY);
-			else
+			if (ShowDivider)
 			{
 				HighlightBorder(Level, ListPos);
 
 				GotoXY(CurX + ColumnWidth, CurY);
 
-				if (ColumnIndex == ColumnCount - 1)
+				if (ColumnIndex != ColumnCount - 1)
+					Text(BoxSymbols[Level == m_ColumnsInStripe ? BS_V2 : BS_V1]);
+				else if (CurX + ColumnWidth == m_Where.right)
 				{
 					SetColor(COL_PANELBOX);
-					Text(CurX + ColumnWidth == m_Where.right ? BoxSymbols[BS_V2] : L' ');
+					Text(BoxSymbols[BS_V2]);
 				}
-				else
-					Text(BoxSymbols[Level == m_ColumnsInStripe ? BS_V2 : BS_V1]);
 			}
 
 			if (Level == m_ColumnsInStripe)
@@ -9198,21 +9178,8 @@ void FileList::ShowList()
 			}
 
 			Level++;
-		}
 
-		if (WhereX() < m_Where.right)
-		{
-			SetColor(COL_PANELTEXT);
-			Text(string(m_Where.right - WhereX(), L' '));
-		}
-	}
-
-	if (!StatusShown && Global->Opt->ShowPanelStatus)
-	{
-		for (const auto Y : std::views::iota(status_text_top_y(), m_Where.bottom))
-		{
-			SetScreen({m_Where.left + 1, Y, m_Where.right - 1, Y}, L' ',
-				colors::PaletteColorToFarColor(COL_PANELTEXT));
+			CurX += ColumnWidth + 1;
 		}
 	}
 
